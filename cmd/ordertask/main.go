@@ -1,11 +1,13 @@
 package main
 
 import (
+	"fmt"
 	"github.com/daicheng123/ordertask-operator/api/tasks/v1alpha1"
 	"github.com/daicheng123/ordertask-operator/cmd/ordertask/utils"
 	"github.com/daicheng123/ordertask-operator/controllers/order_task"
 	"log"
 	"net/http"
+	"os"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -89,5 +91,9 @@ func (o *Operator) Run() error {
 }
 
 func main() {
-
+	operator := NewOperator()
+	if err := operator.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "error executing: %s", err)
+	}
+	os.Exit(-1)
 }
