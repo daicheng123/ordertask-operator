@@ -24,10 +24,6 @@ func (ef *EntryFlags) validate() error {
 		return errors.New("wait file can't be empty!")
 	}
 
-	if len(ef.out) == 0 {
-		return errors.New("out file can't be empty!")
-	}
-
 	if len(ef.command) == 0 {
 		return errors.New("command  can't be empty!")
 	}
