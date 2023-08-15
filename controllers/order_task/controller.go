@@ -6,6 +6,7 @@ import (
 	"github.com/daicheng123/ordertask-operator/builders/pod_builder"
 	"github.com/daicheng123/ordertask-operator/pkg/k8s/clientset/versioned"
 	"github.com/daicheng123/ordertask-operator/pkg/utils/k8s_util"
+	"github.com/daicheng123/ordertask-operator/pkg/utils/list"
 	apiextensionsv1beta1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
 	apiextensionsclient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -14,34 +15,45 @@ import (
 	"k8s.io/client-go/tools/clientcmd/api"
 	"k8s.io/utils/lru"
 	"reflect"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"time"
 )
 
+const (
+//NotifyConcurrency = 20
+)
+
 type OrderTaskController struct {
-	client.Client
 	crdCli     *versioned.Clientset
 	manager    manager.Manager
 	imageCache *lru.Cache
+	eventQueue *list.SafeListLimited
+	errorChan  chan error
 }
 
 func NewReconciler(mgr manager.Manager, crdCli *versioned.Clientset, apiextCli *apiextensionsclient.Clientset) (reconcile.Reconciler, error) {
 	reconciler := &OrderTaskController{
-		Client: mgr.GetClient(), manager: mgr, crdCli: crdCli,
+		manager:    mgr,
+		crdCli:     crdCli,
+		eventQueue: list.NewSafeListLimited(1000),
+		errorChan:  make(chan error),
 	}
+	//go reconciler.processTaskEventsQueue()
+
 	return reconciler, reconciler.createCustomResourceDefinition(context.Background(), apiextCli)
 }
 
 func (otc *OrderTaskController) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
 	ot := &v1alpha1.OrderStep{}
-	err := otc.Get(ctx, req.NamespacedName, ot)
+	err := otc.manager.GetClient().Get(ctx, req.NamespacedName, ot)
 	if err != nil {
 		return reconcile.Result{}, err
 	}
-
-	podBuilder := pod_builder.NewPodBuilder(ot, otc.Client, otc.imageCache)
+	//if err := k8s_util.RetryPushPod2List(ctx, otc.eventQueue, ot, time.Second, 3); err != nil {
+	//	return reconcile.Result{}, err
+	//}
+	podBuilder := pod_builder.NewPodBuilder(ot, otc.manager.GetClient(), otc.imageCache)
 	if err = podBuilder.Builder(ctx); err != nil {
 		return reconcile.Result{}, err
 	}
@@ -97,3 +109,33 @@ func (otc *OrderTaskController) createCustomResourceDefinition(ctx context.Conte
 	}
 	return nil
 }
+
+//
+//func (otc *OrderTaskController) processTaskEventsQueue(stopCh <-chan struct{}, wg *sync.WaitGroup) {
+//	sema := semaphore.NewSemaphore(NotifyConcurrency)
+//	duration := time.Duration(100) * time.Millisecond
+//	for {
+//		events := otc.EventQueue.PopBackBy(100)
+//		if len(events) == 0 {
+//			time.Sleep(duration)
+//			continue
+//		}
+//		otc.process(events, sema)
+//	}
+//}
+//
+//func (otc *OrderTaskController) process(events []interface{}, sema *semaphore.Semaphore) {
+//	for i := range events {
+//		if events[i] == nil {
+//			continue
+//		}
+//
+//		event := events[i].(*v1alpha1.OrderStep)
+//		sema.Acquire()
+//		go func(event *v1alpha1.OrderStep) {
+//			defer sema.Release()
+//			//e.consumeOne(event)
+//		}(event)
+//	}
+
+//}

@@ -3,13 +3,15 @@ package k8s_util
 import (
 	"context"
 	"fmt"
+	"github.com/daicheng123/ordertask-operator/api/tasks/v1alpha1"
+	"github.com/daicheng123/ordertask-operator/pkg/utils/list"
 	"github.com/daicheng123/ordertask-operator/pkg/utils/retry_util"
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"time"
 )
 
-func CreateAndWaitPod(ctx context.Context, cli client.Client, pod *corev1.Pod, interval time.Duration, maxRetries int) (*corev1.Pod, error) {
+func RetryCreateAndWaitPod(ctx context.Context, cli client.Client, pod *corev1.Pod, interval time.Duration, maxRetries int) (*corev1.Pod, error) {
 	var err error
 	if err = cli.Create(ctx, pod); err != nil {
 		return nil, err
@@ -36,6 +38,23 @@ func CreateAndWaitPod(ctx context.Context, cli client.Client, pod *corev1.Pod, i
 		}
 		return nil, fmt.Errorf("failed to wait pod running: %v", err)
 	}
-
 	return retPod, nil
+}
+
+func RetryPushPod2List(_ context.Context, sl *list.SafeListLimited, task *v1alpha1.OrderStep, interval time.Duration, maxRetries int) error {
+	var err error
+	err = retry_util.Retry(interval, maxRetries, func() (bool, error) {
+		if !sl.PushFront(task) {
+			return false, nil
+		}
+		return true, nil
+	})
+
+	if err != nil {
+		if retry_util.IsRetryFailure(err) {
+			return fmt.Errorf("event_push_queue: queue is full, event: %v", err)
+		}
+		return fmt.Errorf("event_push_queue: failed to push pod into queue: %v", err)
+	}
+	return nil
 }
