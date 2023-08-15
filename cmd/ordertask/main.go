@@ -56,16 +56,6 @@ func (o *Operator) Run() error {
 		return err
 	}
 
-	err = v1alpha1.SchemeBuilder.AddToScheme(mgr.GetScheme())
-	if err != nil {
-		mgr.GetLogger().Error(err, "failed to add schema.")
-		return err
-	}
-	//metrics.Registry
-	go func() {
-		http.ListenAndServe(o.ListenAddr, nil)
-	}()
-
 	_, crdCli, apiextCli, err := utils.CreateOperatorClients(o.OperatorFlags)
 	if err != nil {
 		mgr.GetLogger().Error(err, "failed to create client sets.")
@@ -76,6 +66,17 @@ func (o *Operator) Run() error {
 		mgr.GetLogger().Error(err, "failed to create reconciler.")
 		return err
 	}
+
+	err = v1alpha1.SchemeBuilder.AddToScheme(mgr.GetScheme())
+	if err != nil {
+		mgr.GetLogger().Error(err, "failed to add schema.")
+		return err
+	}
+	//metrics.Registry
+	go func() {
+		http.ListenAndServe(o.ListenAddr, nil)
+	}()
+
 	if err = ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.OrderStep{}).
 		Complete(reconciler); err != nil {
