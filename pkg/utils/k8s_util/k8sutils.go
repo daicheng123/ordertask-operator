@@ -1,4 +1,4 @@
-package k8sutil
+package k8s_util
 
 import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"

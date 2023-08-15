@@ -3,12 +3,14 @@ package pod_builder
 import (
 	"context"
 	"github.com/daicheng123/ordertask-operator/api/tasks/v1alpha1"
+	"github.com/daicheng123/ordertask-operator/pkg/utils/k8s_util"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/lru"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type PodBuilderInterface interface {
@@ -147,7 +149,9 @@ func (pb *PodBuilder) Builder(ctx context.Context) error {
 		Name:       pb.pod.Name,
 		UID:        pb.pod.UID,
 	})
-	return pb.Client.Create(ctx, pb.pod)
+	_, err := k8s_util.CreateAndWaitPod(ctx, pb.Client, pb.pod, 3*time.Second, 3)
+
+	return err
 }
 
 func NewPodBuilder(task *v1alpha1.OrderStep, client client.Client, cache *lru.Cache) *PodBuilder {

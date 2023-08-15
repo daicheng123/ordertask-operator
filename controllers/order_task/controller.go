@@ -5,7 +5,7 @@ import (
 	"github.com/daicheng123/ordertask-operator/api/tasks/v1alpha1"
 	"github.com/daicheng123/ordertask-operator/builders/pod_builder"
 	"github.com/daicheng123/ordertask-operator/pkg/k8s/clientset/versioned"
-	"github.com/daicheng123/ordertask-operator/pkg/utils/k8sutil"
+	"github.com/daicheng123/ordertask-operator/pkg/utils/k8s_util"
 	apiextensionsv1beta1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
 	apiextensionsclient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -64,7 +64,7 @@ func (otc *OrderTaskController) createCustomResourceDefinition(ctx context.Conte
 		},
 	}
 	_, err := apiextCli.ApiextensionsV1beta1().CustomResourceDefinitions().Create(ctx, crd, metav1.CreateOptions{})
-	if err != nil && !k8sutil.IsKubernetesResourceAlreadyExistError(err) {
+	if err != nil && !k8s_util.IsKubernetesResourceAlreadyExistError(err) {
 		return err
 	}
 	// wait for order task crd resource being created
