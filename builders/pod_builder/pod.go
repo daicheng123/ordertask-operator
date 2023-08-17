@@ -2,11 +2,15 @@ package pod_builder
 
 import (
 	"context"
+	"fmt"
 	"github.com/daicheng123/ordertask-operator/api/tasks/v1alpha1"
+	image2 "github.com/daicheng123/ordertask-operator/pkg/image"
 	"github.com/daicheng123/ordertask-operator/pkg/utils/k8s_util"
+	"github.com/google/go-containerregistry/pkg/name"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/lru"
+	"runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"strconv"
 	"strings"
@@ -22,13 +26,18 @@ type PodBuilderInterface interface {
 }
 
 const (
-	orderTaskNamePrefix = "order-task-"
-	orderField          = "order"
-	initContainerPath   = "chengdai/entrypoint"
+	orderTaskNamePrefix          = "order-task-"
+	initContainerPath            = "chengdai/entrypoint"
+	annotationsOrderField        = "orderField"
+	annotationsOrderInitialValue = "0"
 
 	EntryPointVolume    = "entrypoint-volume"
 	DevopsScriptsVolume = "scripts-volume"
 	PodInfoVolume       = "podinfo"
+)
+
+var (
+	osArch = fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH)
 )
 
 type PodBuilder struct {
@@ -56,6 +65,22 @@ func (pb *PodBuilder) setInitContainer() {
 }
 
 func (pb *PodBuilder) setContainer(index int, step v1alpha1.Step) corev1.Container {
+	if len(step.Command) == 0 {
+		imageInfo, err := pb.getImageInfoWithName(step.Image)
+		if err != nil {
+			return step.Container
+		}
+
+		if imageCmd, ok := imageInfo.Command[osArch]; ok {
+			step.Command = imageCmd.Command
+			if len(step.Args) == 0 {
+				step.Args = imageCmd.Args
+			}
+		} else {
+			return step.Container // error image command
+		}
+		//step.Command = imageInfo.Command[osArch].Command
+	}
 
 	container := corev1.Container{
 		ImagePullPolicy: corev1.PullIfNotPresent,
@@ -124,7 +149,7 @@ func (pb *PodBuilder) setPodMeta() {
 	pb.pod.Spec.RestartPolicy = corev1.RestartPolicyNever
 
 	annotations := map[string]string{
-		orderField: "0",
+		annotationsOrderField: annotationsOrderInitialValue,
 	}
 	pb.pod.SetAnnotations(annotations)
 }
@@ -149,7 +174,7 @@ func (pb *PodBuilder) Builder(ctx context.Context) error {
 		Name:       pb.pod.Name,
 		UID:        pb.pod.UID,
 	})
-	_, err := k8s_util.CreateAndWaitPod(ctx, pb.Client, pb.pod, 3*time.Second, 3)
+	_, err := k8s_util.RetryCreateAndWaitPod(ctx, pb.Client, pb.pod, time.Second, 3)
 
 	return err
 }
@@ -160,6 +185,24 @@ func NewPodBuilder(task *v1alpha1.OrderStep, client client.Client, cache *lru.Ca
 		Client:     client,
 		imageCache: cache,
 	}
+}
+
+func (pb *PodBuilder) getImageInfoWithName(imageName string) (*image2.ImageInfo, error) {
+	ref, err := name.ParseReference(imageName, name.WeakValidation)
+	if err != nil {
+		return nil, err
+	}
+	var imageInfo *image2.ImageInfo
+	if v, ok := pb.imageCache.Get(ref); ok {
+		imageInfo = v.(*image2.ImageInfo)
+	} else {
+		imageInfo, err := image2.ParseImage(imageName)
+		if err != nil {
+			return nil, err
+		}
+		pb.imageCache.Add(ref, imageInfo)
+	}
+	return imageInfo, nil
 }
 
 func generateBaseName(name string) string {

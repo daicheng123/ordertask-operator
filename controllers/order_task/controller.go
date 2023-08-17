@@ -13,15 +13,19 @@ import (
 	k8sErr "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/tools/clientcmd/api"
+	"k8s.io/client-go/util/workqueue"
 	"k8s.io/utils/lru"
 	"reflect"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"time"
 )
 
 const (
-//NotifyConcurrency = 20
+	// NotifyConcurrency = 20
+	defaultImageSize     = 100
+	defaultEvictPoolSize = 100
 )
 
 type OrderTaskController struct {
@@ -34,10 +38,14 @@ type OrderTaskController struct {
 
 func NewReconciler(mgr manager.Manager, crdCli *versioned.Clientset, apiextCli *apiextensionsclient.Clientset) (reconcile.Reconciler, error) {
 	reconciler := &OrderTaskController{
-		manager:    mgr,
-		crdCli:     crdCli,
-		eventQueue: list.NewSafeListLimited(1000),
-		errorChan:  make(chan error),
+		manager: mgr,
+		crdCli:  crdCli,
+		imageCache: lru.NewWithEvictionFunc(defaultImageSize, func(key lru.Key, value interface{}) {
+
+		}),
+
+		//eventQueue: list.NewSafeListLimited(1000),
+		//errorChan:  make(chan error),
 	}
 	//go reconciler.processTaskEventsQueue()
 
@@ -66,9 +74,15 @@ func (otc *OrderTaskController) createCustomResourceDefinition(ctx context.Conte
 			Name: v1alpha1.OrderTaskCRDName,
 		},
 		Spec: apiextensionsv1beta1.CustomResourceDefinitionSpec{
-			Group:   api.SchemeGroupVersion.Group,
-			Version: v1alpha1.OrderTaskVersion,
-			Scope:   apiextensionsv1beta1.NamespaceScoped,
+			Group: api.SchemeGroupVersion.Group,
+			Versions: []apiextensionsv1beta1.CustomResourceDefinitionVersion{
+				{
+					Name:    v1alpha1.OrderTaskVersion,
+					Storage: true,
+					Served:  true,
+				},
+			},
+			Scope: apiextensionsv1beta1.NamespaceScoped,
 			Names: apiextensionsv1beta1.CustomResourceDefinitionNames{
 				Plural: v1alpha1.OrderTaskResourcePlural,
 				Kind:   reflect.TypeOf(v1alpha1.OrderStep{}).Name(),
@@ -108,6 +122,10 @@ func (otc *OrderTaskController) createCustomResourceDefinition(ctx context.Conte
 		return err
 	}
 	return nil
+}
+
+func (otc *OrderTaskController) OnUpdateFunc(ctx context.Context, event event.UpdateEvent, limitingInterface workqueue.RateLimitingInterface) {
+
 }
 
 //

@@ -24,7 +24,7 @@ func ParseImage(img string) (*ImageInfo, error) {
 			return nil, err
 		}
 		config, err := image.ConfigFile()
-		imgBuilder.AddImageCommand(config.OS, config.Architecture, config.Config.Entrypoint, config.Config.Cmd)
+		imgBuilder.addImageCommand(config.OS, config.Architecture, config.Config.Entrypoint, config.Config.Cmd)
 	}
 	if des.MediaType.IsIndex() {
 		idx, err := des.ImageIndex()
@@ -44,7 +44,7 @@ func ParseImage(img string) (*ImageInfo, error) {
 			if err != nil {
 				return nil, err
 			}
-			imgBuilder.AddImageCommand(
+			imgBuilder.addImageCommand(
 				config.OS, config.Architecture, config.Config.Entrypoint, config.Config.Cmd)
 		}
 	}
