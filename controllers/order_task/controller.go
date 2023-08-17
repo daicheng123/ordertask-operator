@@ -3,9 +3,9 @@ package order_task
 import (
 	"context"
 	"github.com/daicheng123/ordertask-operator/api/tasks/v1alpha1"
-	"github.com/daicheng123/ordertask-operator/builders/pod_builder"
+	"github.com/daicheng123/ordertask-operator/manager/pod_manager"
 	"github.com/daicheng123/ordertask-operator/pkg/k8s/clientset/versioned"
-	"github.com/daicheng123/ordertask-operator/pkg/utils/k8s_util"
+	"github.com/daicheng123/ordertask-operator/pkg/utils/k8s_utils"
 	"github.com/daicheng123/ordertask-operator/pkg/utils/list"
 	apiextensionsv1beta1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
 	apiextensionsclient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
@@ -14,6 +14,7 @@ import (
 	k8sErr "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/tools/clientcmd/api"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/utils/lru"
 	"reflect"
@@ -35,17 +36,19 @@ type OrderTaskReconciler interface {
 }
 
 type OrderTaskController struct {
-	crdCli     *versioned.Clientset
-	manager    manager.Manager
-	imageCache *lru.Cache
-	eventQueue *list.SafeListLimited
-	errorChan  chan error
+	crdCli        *versioned.Clientset
+	manager       manager.Manager
+	eventRecorder record.EventRecorder
+	imageCache    *lru.Cache
+	eventQueue    *list.SafeListLimited
+	errorChan     chan error
 }
 
 func NewReconciler(mgr manager.Manager, crdCli *versioned.Clientset, apiextCli *apiextensionsclient.Clientset) (OrderTaskReconciler, error) {
 	reconciler := &OrderTaskController{
-		manager: mgr,
-		crdCli:  crdCli,
+		manager:       mgr,
+		crdCli:        crdCli,
+		eventRecorder: mgr.GetEventRecorderFor(v1alpha1.OrderTaskResourceKind),
 		imageCache: lru.NewWithEvictionFunc(defaultImageSize, func(key lru.Key, value interface{}) {
 
 		}),
@@ -54,7 +57,6 @@ func NewReconciler(mgr manager.Manager, crdCli *versioned.Clientset, apiextCli *
 		//errorChan:  make(chan error),
 	}
 	//go reconciler.processTaskEventsQueue()
-
 	return reconciler, reconciler.createCustomResourceDefinition(context.Background(), apiextCli)
 }
 
@@ -64,16 +66,16 @@ func (otc *OrderTaskController) Reconcile(ctx context.Context, req reconcile.Req
 	client := otc.manager.GetClient()
 	err := client.Get(ctx, req.NamespacedName, ot)
 
-	if err == nil || (err != nil && k8s_util.IsKubernetesResourceNotExist(err)) {
+	if err == nil || (err != nil && k8s_utils.IsKubernetesResourceNotExist(err)) {
 
-		podBuilder := pod_builder.NewPodBuilder(ot, client, otc.imageCache)
-		if err = podBuilder.Builder(ctx); err != nil {
+		podManager := pod_manager.NewPodManager(ot, client, otc.imageCache)
+		if err = podManager.Builder(ctx); err != nil {
 			return reconcile.Result{}, err
 		}
-
 		return reconcile.Result{}, nil
 	}
-
+	k8s_utils.TaskAddNormalEvent[&v1alpha1.OrderStep{}](otc.eventRecorder, ot.GetNamespace()+"/"+ot.GetName())
+	// otc.eventRecorder.Eventf(&v1alpha1.OrderStep{}, apicoreV1.EventTypeNormal, "start", "")
 	return reconcile.Result{}, err
 }
 
@@ -99,7 +101,7 @@ func (otc *OrderTaskController) createCustomResourceDefinition(ctx context.Conte
 		},
 	}
 	_, err := apiextCli.ApiextensionsV1beta1().CustomResourceDefinitions().Create(ctx, crd, metav1.CreateOptions{})
-	if err != nil && !k8s_util.IsKubernetesResourceAlreadyExistError(err) {
+	if err != nil && !k8s_utils.IsKubernetesResourceAlreadyExistError(err) {
 		return err
 	}
 	// wait for order task crd resource being created

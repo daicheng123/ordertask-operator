@@ -1,11 +1,11 @@
-package pod_builder
+package pod_manager
 
 import (
 	"context"
 	"fmt"
 	"github.com/daicheng123/ordertask-operator/api/tasks/v1alpha1"
 	image2 "github.com/daicheng123/ordertask-operator/pkg/image"
-	"github.com/daicheng123/ordertask-operator/pkg/utils/k8s_util"
+	"github.com/daicheng123/ordertask-operator/pkg/utils/k8s_utils"
 	"github.com/google/go-containerregistry/pkg/name"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -18,7 +18,7 @@ import (
 	"time"
 )
 
-type PodBuilderInterface interface {
+type PodManagerInterface interface {
 	setInitContainer()
 	setContainer(index int, step v1alpha1.OrderStep) (corev1.Container, error)
 	setPodVolumes()
@@ -31,6 +31,7 @@ const (
 	initContainerPath            = "chengdai/entrypoint"
 	annotationsOrderField        = "orderField"
 	annotationsOrderInitialValue = "0"
+	annotationTaskExistValue     = "-1"
 
 	EntryPointVolume    = "entrypoint-volume"
 	DevopsScriptsVolume = "scripts-volume"
@@ -41,16 +42,16 @@ var (
 	osArch = fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH)
 )
 
-type PodBuilder struct {
+type PodManager struct {
 	pod        *corev1.Pod
 	task       *v1alpha1.OrderStep
 	Client     client.Client
 	imageCache *lru.Cache
 }
 
-func (pb *PodBuilder) setInitContainer() {
+func (pm *PodManager) setInitContainer() {
 	initContainer := corev1.Container{
-		Name:    generateBaseName(pb.task.GetName()) + "-init",
+		Name:    generateBaseName(pm.task.GetName()) + "-init",
 		Image:   initContainerPath,
 		Command: []string{"cp", "/app/entrypoint", "/entrypoint/bin/"},
 		VolumeMounts: []corev1.VolumeMount{
@@ -60,14 +61,14 @@ func (pb *PodBuilder) setInitContainer() {
 			},
 		},
 	}
-	pb.pod.Spec.InitContainers = []corev1.Container{
+	pm.pod.Spec.InitContainers = []corev1.Container{
 		initContainer,
 	}
 }
 
-func (pb *PodBuilder) setContainer(index int, step v1alpha1.Step) corev1.Container {
+func (pm *PodManager) setContainer(index int, step v1alpha1.Step) corev1.Container {
 	if len(step.Command) == 0 {
-		imageInfo, err := pb.getImageInfoWithName(step.Image)
+		imageInfo, err := pm.getImageInfoWithName(step.Image)
 		if err != nil {
 			return step.Container
 		}
@@ -111,8 +112,8 @@ func (pb *PodBuilder) setContainer(index int, step v1alpha1.Step) corev1.Contain
 	return container
 }
 
-func (pb *PodBuilder) setPodVolumes() {
-	pb.pod.Spec.Volumes = []corev1.Volume{
+func (pm *PodManager) setPodVolumes() {
+	pm.pod.Spec.Volumes = []corev1.Volume{
 		{
 			Name: EntryPointVolume,
 			VolumeSource: corev1.VolumeSource{
@@ -143,80 +144,120 @@ func (pb *PodBuilder) setPodVolumes() {
 	}
 }
 
-func (pb *PodBuilder) setPodMeta() {
-	pb.pod.SetName(generateBaseName(pb.task.GetName()))
-	pb.pod.SetNamespace(pb.task.GetNamespace())
+func (pm *PodManager) setPodMeta() {
+	pm.pod.SetName(generateBaseName(pm.task.GetName()))
+	pm.pod.SetNamespace(pm.task.GetNamespace())
 
-	pb.pod.Spec.RestartPolicy = corev1.RestartPolicyNever
+	pm.pod.Spec.RestartPolicy = corev1.RestartPolicyNever
 
 	annotations := map[string]string{
 		annotationsOrderField: annotationsOrderInitialValue,
 	}
-	pb.pod.SetAnnotations(annotations)
+	pm.pod.SetAnnotations(annotations)
 }
 
-func (pb *PodBuilder) Builder(ctx context.Context) error {
-	pb.pod = new(corev1.Pod)
-	pb.setPodMeta()
-	pb.setInitContainer()
-
-	containers := make([]corev1.Container, 0, len(pb.task.Spec.Steps))
-
-	for i := 0; i < len(pb.task.Spec.Steps); i++ {
-		containers = append(containers, pb.setContainer(i+1, pb.task.Spec.Steps[i]))
+func (pm *PodManager) Builder(ctx context.Context) error {
+	pod, err := pm.getChildPod(ctx)
+	if err == nil {
+		if pod.Status.Phase == corev1.PodRunning && pod.GetAnnotations()[annotationsOrderField] == annotationsOrderField {
+			pod.GetAnnotations()[annotationsOrderField] = "1"
+			return pm.Client.Update(ctx, pod)
+		} else {
+			if err = pm.forward(ctx, pod); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
-	pb.pod.Spec.Containers = containers
-	pb.setPodVolumes()
+
+	pm.pod = new(corev1.Pod)
+	pm.setPodMeta()
+	pm.setInitContainer()
+
+	containers := make([]corev1.Container, 0, len(pm.task.Spec.Steps))
+
+	for i := 0; i < len(pm.task.Spec.Steps); i++ {
+		containers = append(containers, pm.setContainer(i+1, pm.task.Spec.Steps[i]))
+	}
+	pm.pod.Spec.Containers = containers
+	pm.setPodVolumes()
 
 	// set owner
-	pb.pod.OwnerReferences = append(pb.pod.OwnerReferences, metav1.OwnerReference{
-		APIVersion: pb.pod.APIVersion,
-		Kind:       pb.pod.Kind,
-		Name:       pb.pod.Name,
-		UID:        pb.pod.UID,
+	pm.pod.OwnerReferences = append(pm.pod.OwnerReferences, metav1.OwnerReference{
+		APIVersion: pm.pod.APIVersion,
+		Kind:       pm.pod.Kind,
+		Name:       pm.pod.Name,
+		UID:        pm.pod.UID,
 	})
-	_, err := k8s_util.RetryCreateAndWaitPod(ctx, pb.Client, pb.pod, time.Second, 3)
-
+	_, err = k8s_utils.RetryCreateAndWaitPod(ctx, pm.Client, pm.pod, time.Second, 3)
 	return err
 }
 
-func NewPodBuilder(task *v1alpha1.OrderStep, client client.Client, cache *lru.Cache) *PodBuilder {
-	return &PodBuilder{
+func NewPodManager(task *v1alpha1.OrderStep, client client.Client, cache *lru.Cache) *PodManager {
+	return &PodManager{
 		task:       task,
 		Client:     client,
 		imageCache: cache,
 	}
 }
 
-func (pb *PodBuilder) getImageInfoWithName(imageName string) (*image2.ImageInfo, error) {
+func (pm *PodManager) getImageInfoWithName(imageName string) (*image2.ImageInfo, error) {
 	ref, err := name.ParseReference(imageName, name.WeakValidation)
 	if err != nil {
 		return nil, err
 	}
 	var imageInfo *image2.ImageInfo
-	if v, ok := pb.imageCache.Get(ref); ok {
+	if v, ok := pm.imageCache.Get(ref); ok {
 		imageInfo = v.(*image2.ImageInfo)
 	} else {
 		imageInfo, err := image2.ParseImage(imageName)
 		if err != nil {
 			return nil, err
 		}
-		pb.imageCache.Add(ref, imageInfo)
+		pm.imageCache.Add(ref, imageInfo)
 	}
 	return imageInfo, nil
 }
 
-func (pb *PodBuilder) getChildPod(ctx context.Context) (*corev1.Pod, error) {
+func (pm *PodManager) getChildPod(ctx context.Context) (*corev1.Pod, error) {
 
 	pod := &corev1.Pod{}
-	err := pb.Client.Get(ctx, types.NamespacedName{
-		Namespace: pb.task.Namespace,
-		Name:      orderTaskNamePrefix + pb.task.Name}, pod)
+	err := pm.Client.Get(ctx, types.NamespacedName{
+		Namespace: pm.task.Namespace,
+		Name:      orderTaskNamePrefix + pm.task.Name}, pod)
 
 	if err != nil {
 		return nil, err
 	}
 	return pod, err
+}
+
+func (pm *PodManager) forward(ctx context.Context, pod *corev1.Pod) error {
+	if pod.Status.Phase == corev1.PodSucceeded {
+		return nil
+	}
+	if pod.Annotations[annotationsOrderField] == annotationTaskExistValue {
+		return nil
+	}
+	order, err := strconv.Atoi(pod.Annotations[annotationsOrderField])
+	if err != nil {
+		return nil
+	}
+	if order == len(pod.Spec.Containers) {
+		return nil
+	}
+
+	if pod.Status.ContainerStatuses[order-1].State.Terminated == nil {
+		return nil
+	} else {
+		if pod.Status.ContainerStatuses[order-1].State.Terminated.ExitCode != 0 {
+			pod.Annotations[annotationsOrderField] = annotationTaskExistValue
+			return pm.Client.Update(ctx, pod)
+		}
+	}
+	order++
+	pod.Annotations[annotationsOrderField] = strconv.Itoa(order)
+	return pm.Client.Update(ctx, pod)
 }
 
 func generateBaseName(name string) string {
