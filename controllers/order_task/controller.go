@@ -10,6 +10,7 @@ import (
 	apiextensionsv1beta1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
 	apiextensionsclient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	k8sErr "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/tools/clientcmd/api"
@@ -28,6 +29,11 @@ const (
 	defaultEvictPoolSize = 100
 )
 
+type OrderTaskReconciler interface {
+	reconcile.Reconciler
+	OnUpdateFunc(context.Context, event.UpdateEvent, workqueue.RateLimitingInterface)
+}
+
 type OrderTaskController struct {
 	crdCli     *versioned.Clientset
 	manager    manager.Manager
@@ -36,7 +42,7 @@ type OrderTaskController struct {
 	errorChan  chan error
 }
 
-func NewReconciler(mgr manager.Manager, crdCli *versioned.Clientset, apiextCli *apiextensionsclient.Clientset) (reconcile.Reconciler, error) {
+func NewReconciler(mgr manager.Manager, crdCli *versioned.Clientset, apiextCli *apiextensionsclient.Clientset) (OrderTaskReconciler, error) {
 	reconciler := &OrderTaskController{
 		manager: mgr,
 		crdCli:  crdCli,
@@ -53,19 +59,22 @@ func NewReconciler(mgr manager.Manager, crdCli *versioned.Clientset, apiextCli *
 }
 
 func (otc *OrderTaskController) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
+
 	ot := &v1alpha1.OrderStep{}
-	err := otc.manager.GetClient().Get(ctx, req.NamespacedName, ot)
-	if err != nil {
-		return reconcile.Result{}, err
+	client := otc.manager.GetClient()
+	err := client.Get(ctx, req.NamespacedName, ot)
+
+	if err == nil || (err != nil && k8s_util.IsKubernetesResourceNotExist(err)) {
+
+		podBuilder := pod_builder.NewPodBuilder(ot, client, otc.imageCache)
+		if err = podBuilder.Builder(ctx); err != nil {
+			return reconcile.Result{}, err
+		}
+
+		return reconcile.Result{}, nil
 	}
-	//if err := k8s_util.RetryPushPod2List(ctx, otc.eventQueue, ot, time.Second, 3); err != nil {
-	//	return reconcile.Result{}, err
-	//}
-	podBuilder := pod_builder.NewPodBuilder(ot, otc.manager.GetClient(), otc.imageCache)
-	if err = podBuilder.Builder(ctx); err != nil {
-		return reconcile.Result{}, err
-	}
-	return reconcile.Result{}, nil
+
+	return reconcile.Result{}, err
 }
 
 func (otc *OrderTaskController) createCustomResourceDefinition(ctx context.Context, apiextCli *apiextensionsclient.Clientset) error {
@@ -124,8 +133,16 @@ func (otc *OrderTaskController) createCustomResourceDefinition(ctx context.Conte
 	return nil
 }
 
-func (otc *OrderTaskController) OnUpdateFunc(ctx context.Context, event event.UpdateEvent, limitingInterface workqueue.RateLimitingInterface) {
-
+func (otc *OrderTaskController) OnUpdateFunc(_ context.Context, event event.UpdateEvent, limitingInterface workqueue.RateLimitingInterface) {
+	for _, ref := range event.ObjectNew.GetOwnerReferences() {
+		if ref.Kind == v1alpha1.OrderTaskResourceKind && ref.APIVersion == v1alpha1.OrderTaskApiVersionGroup {
+			limitingInterface.Add(reconcile.Request{
+				types.NamespacedName{
+					Name: ref.Name, Namespace: event.ObjectNew.GetNamespace(),
+				},
+			})
+		}
+	}
 }
 
 //

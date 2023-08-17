@@ -9,6 +9,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/name"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/lru"
 	"runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -203,6 +204,19 @@ func (pb *PodBuilder) getImageInfoWithName(imageName string) (*image2.ImageInfo,
 		pb.imageCache.Add(ref, imageInfo)
 	}
 	return imageInfo, nil
+}
+
+func (pb *PodBuilder) getChildPod(ctx context.Context) (*corev1.Pod, error) {
+
+	pod := &corev1.Pod{}
+	err := pb.Client.Get(ctx, types.NamespacedName{
+		Namespace: pb.task.Namespace,
+		Name:      orderTaskNamePrefix + pb.task.Name}, pod)
+
+	if err != nil {
+		return nil, err
+	}
+	return pod, err
 }
 
 func generateBaseName(name string) string {

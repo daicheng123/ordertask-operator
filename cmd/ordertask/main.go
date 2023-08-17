@@ -1,26 +1,21 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"github.com/daicheng123/ordertask-operator/api/tasks/v1alpha1"
 	"github.com/daicheng123/ordertask-operator/cmd/ordertask/utils"
 	"github.com/daicheng123/ordertask-operator/controllers/order_task"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/util/workqueue"
 	"log"
 	"net/http"
 	"os"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
-	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 const (
@@ -84,22 +79,10 @@ func (o *Operator) Run() error {
 		http.ListenAndServe(o.ListenAddr, nil)
 	}()
 
-	updateFunc := func(ctx context.Context, event event.UpdateEvent, limitingInterface workqueue.RateLimitingInterface) {
-		for _, ref := range event.ObjectNew.GetOwnerReferences() {
-			if ref.Kind == v1alpha1.OrderTaskResourceKind && ref.APIVersion == v1alpha1.OrderTaskApiVersionGroup {
-				limitingInterface.Add(reconcile.Request{
-					types.NamespacedName{
-						Name: ref.Name, Namespace: event.ObjectNew.GetNamespace(),
-					},
-				})
-			}
-		}
-	}
-
 	if err = ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.OrderStep{}).
 		Watches(&corev1.Pod{}, handler.Funcs{
-			UpdateFunc: updateFunc,
+			UpdateFunc: reconciler.OnUpdateFunc,
 		}).
 		Complete(reconciler); err != nil {
 		mgr.GetLogger().Error(err, "failed to set up order task controller.")

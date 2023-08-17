@@ -7,3 +7,7 @@ import (
 func IsKubernetesResourceAlreadyExistError(err error) bool {
 	return apierrors.IsAlreadyExists(err)
 }
+
+func IsKubernetesResourceNotExist(err error) bool {
+	return apierrors.IsNotFound(err)
+}
